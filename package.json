@@ -1,0 +1,28 @@
+{
+  "name": "recibo_aa",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:arc": "hardhat run scripts/deploy.ts --network arcTestnet"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@types/node": "^24.10.1",
+    "dotenv": "^17.2.3",
+    "hardhat": "^2.26.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.4.0",
+    "openpgp": "^6.2.2",
+    "openzeppelin-contracts": "^4.0.0"
+  }
+}

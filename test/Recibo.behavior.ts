@@ -131,10 +131,9 @@ describe("Recibo - full behavior", function () {
     ])) as unknown as GaslessToken;
     await token.waitForDeployment();
 
-    // Deploy Recibo with relayer as trusted forwarder
+    // Deploy Recibo
     const recibo = (await ethers.deployContract("Recibo", [
       await token.getAddress(),
-      relayer.address
     ])) as unknown as Recibo;
     await recibo.waitForDeployment();
 
@@ -183,24 +182,7 @@ describe("Recibo - full behavior", function () {
         .withArgs(deployer.address, deployer.address, alice.address);
     });
 
-    it("allows trusted forwarder to send on behalf of user", async function () {
-      const { recibo, alice, bob, relayer } = await deployFixture();
-      const message = utf8Bytes("hello relayed world");
-
-      const info: ReciboInfoStruct = {
-        messageFrom: alice.address,
-        messageTo: bob.address,
-        metadata: PGP_METADATA,
-        message,
-      };
-
-      // relayer is the trusted forwarder
-      await expect(recibo.connect(relayer).sendMsg(info))
-        .to.emit(recibo, "SentMsg")
-        .withArgs(relayer.address, alice.address, bob.address);
-    });
-
-    it("rejects spoofed sender from untrusted caller", async function () {
+    it("rejects spoofed sender", async function () {
         const { recibo, alice, bob, dave } = await deployFixture();
         const message = utf8Bytes("fake message");
   
@@ -211,9 +193,9 @@ describe("Recibo - full behavior", function () {
           message,
         };
   
-        // Dave is NOT the trusted forwarder
+        // Dave tries to send as Alice
         await expect(recibo.connect(dave).sendMsg(info))
-          .to.be.revertedWith("Recibo: sender not authorized");
+          .to.be.revertedWith("Recibo: message sender mismatch");
       });
   });
 

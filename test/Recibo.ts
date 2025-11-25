@@ -15,7 +15,6 @@ describe("Recibo", function () {
 
     const recibo = await ethers.deployContract("Recibo", [
       await token.getAddress(),
-      ethers.ZeroAddress // No trusted forwarder for basic tests
     ]);
     await recibo.waitForDeployment();
 

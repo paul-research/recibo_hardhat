@@ -31,15 +31,15 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 contract Recibo is ReciboEvents, EIP712 {
     GaslessToken public immutable _token;
     
-    bytes32 private constant MESSAGE_TYPEHASH = keccak256("ReciboInfo(address messageFrom,address messageTo,string metadata,bytes message,uint256 nonce)");
-    mapping(address => uint256) public nonces;
+    bytes32 private constant MESSAGE_TYPEHASH = keccak256("ReciboInfo(address messageFrom,address messageTo,string metadata,bytes message,bytes32 nonce)");
+    mapping(address => mapping(bytes32 => bool)) private _authorizationStates;
 
     struct ReciboInfo {
         address messageFrom;
         address messageTo;
         string metadata;
         bytes message;
-        uint256 nonce;
+        bytes32 nonce;
         bytes signature;
     }
 
@@ -52,8 +52,19 @@ contract Recibo is ReciboEvents, EIP712 {
         _token = token;
     }
 
+    /**
+     * @notice Returns the state of an authorization
+     * @param authorizer    Authorizer's address
+     * @param nonce         Nonce of the authorization
+     * @return True if the nonce is used
+     */
+    function authorizationState(address authorizer, bytes32 nonce) external view returns (bool) {
+        return _authorizationStates[authorizer][nonce];
+    }
+
     function _verifySignature(ReciboInfo calldata info) internal {
-        require(info.nonce == nonces[info.messageFrom]++, "Recibo: invalid nonce");
+        require(!_authorizationStates[info.messageFrom][info.nonce], "Recibo: authorization is used or canceled");
+
         bytes32 structHash = keccak256(abi.encode(
             MESSAGE_TYPEHASH,
             info.messageFrom,
@@ -67,6 +78,8 @@ contract Recibo is ReciboEvents, EIP712 {
             SignatureChecker.isValidSignatureNow(info.messageFrom, hash, info.signature),
             "Recibo: invalid signature"
         );
+        
+        _authorizationStates[info.messageFrom][info.nonce] = true;
     }
 
     /**
@@ -76,6 +89,8 @@ contract Recibo is ReciboEvents, EIP712 {
     function sendMsg(
         ReciboInfo calldata info
     ) public {
+        // Only require Recibo signature if msg.sender is not the messageFrom.
+        // This prevents spoofing when using a relayer.
         if (info.messageFrom != msg.sender) {
             _verifySignature(info);
         }
@@ -94,9 +109,8 @@ contract Recibo is ReciboEvents, EIP712 {
         uint256 value,
         ReciboInfo calldata info
     ) public returns (bool) {
-        if (info.messageFrom != msg.sender) {
-            _verifySignature(info);
-        }
+        // Direct calls are authenticated by msg.sender
+        require(info.messageFrom == msg.sender, "Recibo: message sender mismatch");
         emit TransferWithMsg(msg.sender, to, info.messageFrom, info.messageTo, value);
         return _token.transferFrom(msg.sender, to, value);
     }
@@ -125,10 +139,7 @@ contract Recibo is ReciboEvents, EIP712 {
         ReciboInfo calldata info
     ) public {
         require(owner != address(this));
-        if (info.messageFrom != owner) {
-             _verifySignature(info);
-        }
-        
+        require(info.messageFrom == owner, "Recibo: message sender mismatch");
         emit ApproveWithMsg(owner, spender, info.messageFrom, info.messageTo, value);
         _token.permit(owner, spender, value, deadline, v, r, s);
     }
@@ -155,10 +166,7 @@ contract Recibo is ReciboEvents, EIP712 {
         bytes32 s,
         ReciboInfo calldata info
     ) public returns (bool) {
-        if (info.messageFrom != msg.sender) {
-             _verifySignature(info);
-        }
-        
+        require(info.messageFrom == msg.sender, "Recibo: message sender mismatch");
         emit TransferWithMsg(msg.sender, to, info.messageFrom, info.messageTo, value);
         _token.permit(msg.sender, address(this), value, deadline, v, r, s);
         return _token.transferFrom(msg.sender, to, value);
@@ -186,12 +194,11 @@ contract Recibo is ReciboEvents, EIP712 {
         bytes memory signature,
         ReciboInfo calldata info
     ) public {
+        // Bind the message to the token authorization nonce
         bytes32 expectedNonce = keccak256(abi.encode(info.messageFrom, info.messageTo, info.message));
         require(nonce == expectedNonce, "Recibo: nonce must be message hash");
         
-        if (info.messageFrom != from) {
-            _verifySignature(info);
-        }
+        require(info.messageFrom == from, "Recibo: message sender mismatch");
 
         emit TransferWithMsg(from, to, info.messageFrom, info.messageTo, value);
         _token.transferWithAuthorization(from, to, value, validAfter, validBefore, nonce, signature);

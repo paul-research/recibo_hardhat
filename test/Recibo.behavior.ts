@@ -10,7 +10,7 @@ type ReciboInfoStruct = {
   messageTo: string;
   metadata: string;
   message: Uint8Array;
-  nonce: bigint;
+  nonce: string; // changed to string (bytes32)
   signature: string;
 };
 
@@ -58,13 +58,13 @@ async function signReciboInfo(
     verifyingContract: await recibo.getAddress(),
   };
 
-  const types = {
+    const types = {
     ReciboInfo: [
       { name: "messageFrom", type: "address" },
       { name: "messageTo", type: "address" },
       { name: "metadata", type: "string" },
       { name: "message", type: "bytes" },
-      { name: "nonce", type: "uint256" },
+      { name: "nonce", type: "bytes32" },
     ],
   };
 
@@ -201,7 +201,7 @@ describe("Recibo - full behavior", function () {
         messageTo: alice.address,
         metadata: PGP_METADATA,
         message,
-        nonce: 0n,
+        nonce: ethers.hexlify(ethers.randomBytes(32)),
         signature: "0x",
       };
 
@@ -212,7 +212,7 @@ describe("Recibo - full behavior", function () {
 
     it("allows relayer with valid signature", async function () {
       const { recibo, alice, bob, relayer } = await deployFixture();
-      const nonce = await recibo.nonces(alice.address);
+      const nonce = ethers.hexlify(ethers.randomBytes(32)); // Random nonce
       const message = utf8Bytes("hello relayed world");
 
       const infoBase = {
@@ -231,7 +231,7 @@ describe("Recibo - full behavior", function () {
         .to.emit(recibo, "SentMsg")
         .withArgs(relayer.address, alice.address, bob.address);
 
-      expect(await recibo.nonces(alice.address)).to.equal(nonce + 1n);
+      expect(await recibo.authorizationState(alice.address, nonce)).to.be.true;
     });
   });
 
@@ -245,7 +245,7 @@ describe("Recibo - full behavior", function () {
         messageTo: bob.address,
         metadata: PGP_METADATA,
         message: utf8Bytes("invoice #1"),
-        nonce: 0n,
+        nonce: ethers.hexlify(ethers.randomBytes(32)),
         signature: "0x",
       };
 
@@ -286,7 +286,7 @@ describe("Recibo - full behavior", function () {
         messageTo: alice.address,
         metadata: PGP_METADATA,
         message: utf8Bytes("permit test"),
-        nonce: 0n,
+        nonce: ethers.hexlify(ethers.randomBytes(32)),
         signature: "0x",
       };
 
@@ -324,7 +324,7 @@ describe("Recibo - full behavior", function () {
         messageTo: bob.address,
         metadata: PGP_METADATA,
         message: utf8Bytes("permit transfer"),
-        nonce: 0n,
+        nonce: ethers.hexlify(ethers.randomBytes(32)),
         signature: "0x",
       };
 
@@ -383,7 +383,7 @@ describe("Recibo - full behavior", function () {
         messageTo: bob.address,
         metadata: PGP_METADATA,
         message: messageBytes,
-        nonce: 0n,
+        nonce: ethers.hexlify(ethers.randomBytes(32)),
         signature: "0x",
       };
 
@@ -423,7 +423,7 @@ describe("Recibo - full behavior", function () {
         messageTo: alice.address,
         metadata: PGP_METADATA,
         message: utf8Bytes("event transfer"),
-        nonce: 0n,
+        nonce: ethers.hexlify(ethers.randomBytes(32)),
         signature: "0x",
       };
 
@@ -449,7 +449,7 @@ describe("Recibo - full behavior", function () {
         messageTo: alice.address,
         metadata: PGP_METADATA,
         message: utf8Bytes("event permit"),
-        nonce: 0n,
+        nonce: ethers.hexlify(ethers.randomBytes(32)),
         signature: "0x",
       };
 

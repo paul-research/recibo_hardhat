@@ -29,7 +29,7 @@ describe("Recibo", function () {
       messageTo: alice.address,
       metadata: "{}",
       message: ethers.toUtf8Bytes("hello world"),
-      nonce: 0,
+      nonce: ethers.hexlify(ethers.randomBytes(32)),
       signature: "0x",
     };
 
@@ -52,7 +52,7 @@ describe("Recibo", function () {
       messageTo: alice.address,
       metadata: "{\"purpose\":\"test\"}",
       message: ethers.toUtf8Bytes("invoice #1"),
-      nonce: 0,
+      nonce: ethers.hexlify(ethers.randomBytes(32)),
       signature: "0x",
     };
 

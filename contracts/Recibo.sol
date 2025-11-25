@@ -28,58 +28,50 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 * @title Recibo
 * @notice Lets callers record messages related to ERC-20 transfers
 */
-contract Recibo is ReciboEvents, EIP712 {
+contract Recibo is ReciboEvents {
     GaslessToken public immutable _token;
-    
-    bytes32 private constant MESSAGE_TYPEHASH = keccak256("ReciboInfo(address messageFrom,address messageTo,string metadata,bytes message,bytes32 nonce)");
-    mapping(address => mapping(bytes32 => bool)) private _authorizationStates;
+    address public trustedForwarder;
+    address public owner;
 
     struct ReciboInfo {
         address messageFrom;
         address messageTo;
         string metadata;
         bytes message;
-        bytes32 nonce;
-        bytes signature;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Recibo: caller is not the owner");
+        _;
     }
 
     /**
      * @notice Deploys Recibo
      * @dev Constructor sets target GaslessToken
      * @param token         Any GaslessToken
+     * @param forwarder     Trusted forwarder address
      */
-    constructor(GaslessToken token) EIP712("Recibo", "1") {
+    constructor(GaslessToken token, address forwarder) {
         _token = token;
+        trustedForwarder = forwarder;
+        owner = msg.sender;
     }
 
     /**
-     * @notice Returns the state of an authorization
-     * @param authorizer    Authorizer's address
-     * @param nonce         Nonce of the authorization
-     * @return True if the nonce is used
+     * @notice Sets the trusted forwarder address
+     * @param forwarder     New trusted forwarder address
      */
-    function authorizationState(address authorizer, bytes32 nonce) external view returns (bool) {
-        return _authorizationStates[authorizer][nonce];
+    function setTrustedForwarder(address forwarder) external onlyOwner {
+        trustedForwarder = forwarder;
     }
 
-    function _verifySignature(ReciboInfo calldata info) internal {
-        require(!_authorizationStates[info.messageFrom][info.nonce], "Recibo: authorization is used or canceled");
-
-        bytes32 structHash = keccak256(abi.encode(
-            MESSAGE_TYPEHASH,
-            info.messageFrom,
-            info.messageTo,
-            keccak256(bytes(info.metadata)),
-            keccak256(info.message),
-            info.nonce
-        ));
-        bytes32 hash = _hashTypedDataV4(structHash);
-        require(
-            SignatureChecker.isValidSignatureNow(info.messageFrom, hash, info.signature),
-            "Recibo: invalid signature"
-        );
-        
-        _authorizationStates[info.messageFrom][info.nonce] = true;
+    /**
+     * @notice Checks if the sender is authorized to send messages on behalf of messageFrom
+     */
+    function _requireAuthorizedSender(address messageFrom) internal view {
+        if (msg.sender != trustedForwarder) {
+            require(msg.sender == messageFrom, "Recibo: sender not authorized");
+        }
     }
 
     /**
@@ -89,11 +81,7 @@ contract Recibo is ReciboEvents, EIP712 {
     function sendMsg(
         ReciboInfo calldata info
     ) public {
-        // Only require Recibo signature if msg.sender is not the messageFrom.
-        // This prevents spoofing when using a relayer.
-        if (info.messageFrom != msg.sender) {
-            _verifySignature(info);
-        }
+        _requireAuthorizedSender(info.messageFrom);
         emit SentMsg(msg.sender, info.messageFrom, info.messageTo);
     }
 
@@ -109,8 +97,7 @@ contract Recibo is ReciboEvents, EIP712 {
         uint256 value,
         ReciboInfo calldata info
     ) public returns (bool) {
-        // Direct calls are authenticated by msg.sender
-        require(info.messageFrom == msg.sender, "Recibo: message sender mismatch");
+        _requireAuthorizedSender(info.messageFrom);
         emit TransferWithMsg(msg.sender, to, info.messageFrom, info.messageTo, value);
         return _token.transferFrom(msg.sender, to, value);
     }
@@ -119,7 +106,7 @@ contract Recibo is ReciboEvents, EIP712 {
     /**
      * @notice Approve spender allowance
      * @dev Token must support https://eips.ethereum.org/EIPS/eip-2612. The spender may not be this contract.
-     * @param owner        Account holder who signed permit
+     * @param tokenOwner   Account holder who signed permit
      * @param spender      Give allowance to this address
      * @param value        Allowance amount
      * @param deadline     Approval is valid until this block.timestamp
@@ -129,7 +116,7 @@ contract Recibo is ReciboEvents, EIP712 {
      * @param info         Message
      */
     function permitWithMsg(
-        address owner,
+        address tokenOwner,
         address spender,
         uint256 value,
         uint256 deadline,
@@ -138,10 +125,13 @@ contract Recibo is ReciboEvents, EIP712 {
         bytes32 s,
         ReciboInfo calldata info
     ) public {
-        require(owner != address(this));
-        require(info.messageFrom == owner, "Recibo: message sender mismatch");
-        emit ApproveWithMsg(owner, spender, info.messageFrom, info.messageTo, value);
-        _token.permit(owner, spender, value, deadline, v, r, s);
+        require(tokenOwner != address(this));
+        _requireAuthorizedSender(info.messageFrom);
+        // Also enforce that messageFrom matches the token owner for consistency
+        require(info.messageFrom == tokenOwner, "Recibo: message sender mismatch");
+        
+        emit ApproveWithMsg(tokenOwner, spender, info.messageFrom, info.messageTo, value);
+        _token.permit(tokenOwner, spender, value, deadline, v, r, s);
     }
 
 
@@ -166,10 +156,19 @@ contract Recibo is ReciboEvents, EIP712 {
         bytes32 s,
         ReciboInfo calldata info
     ) public returns (bool) {
-        require(info.messageFrom == msg.sender, "Recibo: message sender mismatch");
-        emit TransferWithMsg(msg.sender, to, info.messageFrom, info.messageTo, value);
-        _token.permit(msg.sender, address(this), value, deadline, v, r, s);
-        return _token.transferFrom(msg.sender, to, value);
+        _requireAuthorizedSender(info.messageFrom);
+        // If relayed, msg.sender is the forwarder. If direct, msg.sender is the user.
+        // Note: standard ERC20 permit requires the owner to sign. 
+        // Here msg.sender (Relayer or User) calls permit on behalf of 'msg.sender'? 
+        // Wait, if Relayer calls this, msg.sender is Relayer. Relayer cannot permit for User.
+        // This function assumes msg.sender IS the user (signer). 
+        // If using TrustedForwarder, we should use info.messageFrom as the 'effective' sender.
+        
+        address effectiveSender = (msg.sender == trustedForwarder) ? info.messageFrom : msg.sender;
+        
+        emit TransferWithMsg(effectiveSender, to, info.messageFrom, info.messageTo, value);
+        _token.permit(effectiveSender, address(this), value, deadline, v, r, s);
+        return _token.transferFrom(effectiveSender, to, value);
     }
 
     /**
@@ -194,7 +193,7 @@ contract Recibo is ReciboEvents, EIP712 {
         bytes memory signature,
         ReciboInfo calldata info
     ) public {
-        // Bind the message to the token authorization nonce
+        // Bind the message to the token authorization nonce - keeping original Python intent
         bytes32 expectedNonce = keccak256(abi.encode(info.messageFrom, info.messageTo, info.message));
         require(nonce == expectedNonce, "Recibo: nonce must be message hash");
         

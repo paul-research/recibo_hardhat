@@ -10,8 +10,6 @@ type ReciboInfoStruct = {
   messageTo: string;
   metadata: string;
   message: Uint8Array;
-  nonce: string; // changed to string (bytes32)
-  signature: string;
 };
 
 const PGP_METADATA =
@@ -44,31 +42,6 @@ function computeMessageNonce(
 async function getChainId(signer: Signer): Promise<bigint> {
   const network = await signer.provider!.getNetwork();
   return network.chainId;
-}
-
-async function signReciboInfo(
-  signer: Signer,
-  info: Omit<ReciboInfoStruct, "signature">,
-  recibo: Recibo,
-): Promise<string> {
-  const domain: TypedDataDomain = {
-    name: "Recibo",
-    version: "1",
-    chainId: await getChainId(signer),
-    verifyingContract: await recibo.getAddress(),
-  };
-
-    const types = {
-    ReciboInfo: [
-      { name: "messageFrom", type: "address" },
-      { name: "messageTo", type: "address" },
-      { name: "metadata", type: "string" },
-      { name: "message", type: "bytes" },
-      { name: "nonce", type: "bytes32" },
-    ],
-  };
-
-  return signer.signTypedData(domain, types, info);
 }
 
 async function signPermit(
@@ -158,8 +131,10 @@ describe("Recibo - full behavior", function () {
     ])) as unknown as GaslessToken;
     await token.waitForDeployment();
 
+    // Deploy Recibo with relayer as trusted forwarder
     const recibo = (await ethers.deployContract("Recibo", [
       await token.getAddress(),
+      relayer.address
     ])) as unknown as Recibo;
     await recibo.waitForDeployment();
 
@@ -201,8 +176,6 @@ describe("Recibo - full behavior", function () {
         messageTo: alice.address,
         metadata: PGP_METADATA,
         message,
-        nonce: ethers.hexlify(ethers.randomBytes(32)),
-        signature: "0x",
       };
 
       await expect(recibo.connect(deployer).sendMsg(info))
@@ -210,29 +183,38 @@ describe("Recibo - full behavior", function () {
         .withArgs(deployer.address, deployer.address, alice.address);
     });
 
-    it("allows relayer with valid signature", async function () {
+    it("allows trusted forwarder to send on behalf of user", async function () {
       const { recibo, alice, bob, relayer } = await deployFixture();
-      const nonce = ethers.hexlify(ethers.randomBytes(32)); // Random nonce
       const message = utf8Bytes("hello relayed world");
 
-      const infoBase = {
+      const info: ReciboInfoStruct = {
         messageFrom: alice.address,
         messageTo: bob.address,
         metadata: PGP_METADATA,
         message,
-        nonce,
-      } satisfies Omit<ReciboInfoStruct, "signature">;
+      };
 
-      const signature = await signReciboInfo(alice, infoBase, recibo);
-
-      const info: ReciboInfoStruct = { ...infoBase, signature };
-
+      // relayer is the trusted forwarder
       await expect(recibo.connect(relayer).sendMsg(info))
         .to.emit(recibo, "SentMsg")
         .withArgs(relayer.address, alice.address, bob.address);
-
-      expect(await recibo.authorizationState(alice.address, nonce)).to.be.true;
     });
+
+    it("rejects spoofed sender from untrusted caller", async function () {
+        const { recibo, alice, bob, dave } = await deployFixture();
+        const message = utf8Bytes("fake message");
+  
+        const info: ReciboInfoStruct = {
+          messageFrom: alice.address, // Dave pretending to be Alice
+          messageTo: bob.address,
+          metadata: PGP_METADATA,
+          message,
+        };
+  
+        // Dave is NOT the trusted forwarder
+        await expect(recibo.connect(dave).sendMsg(info))
+          .to.be.revertedWith("Recibo: sender not authorized");
+      });
   });
 
   describe("transfer from with message", function () {
@@ -245,8 +227,6 @@ describe("Recibo - full behavior", function () {
         messageTo: bob.address,
         metadata: PGP_METADATA,
         message: utf8Bytes("invoice #1"),
-        nonce: ethers.hexlify(ethers.randomBytes(32)),
-        signature: "0x",
       };
 
       await expect(recibo.connect(deployer).transferFromWithMsg(
@@ -286,8 +266,6 @@ describe("Recibo - full behavior", function () {
         messageTo: alice.address,
         metadata: PGP_METADATA,
         message: utf8Bytes("permit test"),
-        nonce: ethers.hexlify(ethers.randomBytes(32)),
-        signature: "0x",
       };
 
       await recibo.permitWithMsg(
@@ -324,8 +302,6 @@ describe("Recibo - full behavior", function () {
         messageTo: bob.address,
         metadata: PGP_METADATA,
         message: utf8Bytes("permit transfer"),
-        nonce: ethers.hexlify(ethers.randomBytes(32)),
-        signature: "0x",
       };
 
       await expect(
@@ -383,10 +359,11 @@ describe("Recibo - full behavior", function () {
         messageTo: bob.address,
         metadata: PGP_METADATA,
         message: messageBytes,
-        nonce: ethers.hexlify(ethers.randomBytes(32)),
-        signature: "0x",
       };
 
+      // Bob submits the transaction, but the info.messageFrom is deployer (signer)
+      // This is valid because we verified the signature against 'from' (deployer)
+      // And we checked info.messageFrom == from
       await expect(
         recibo.connect(bob).transferWithAuthorizationWithMsg(
           deployer.address,
@@ -423,8 +400,6 @@ describe("Recibo - full behavior", function () {
         messageTo: alice.address,
         metadata: PGP_METADATA,
         message: utf8Bytes("event transfer"),
-        nonce: ethers.hexlify(ethers.randomBytes(32)),
-        signature: "0x",
       };
 
       await token
@@ -449,8 +424,6 @@ describe("Recibo - full behavior", function () {
         messageTo: alice.address,
         metadata: PGP_METADATA,
         message: utf8Bytes("event permit"),
-        nonce: ethers.hexlify(ethers.randomBytes(32)),
-        signature: "0x",
       };
 
       const approveTx = await recibo.permitWithMsg(
@@ -491,4 +464,3 @@ describe("Recibo - full behavior", function () {
     });
   });
 });
-

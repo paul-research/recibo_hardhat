@@ -15,6 +15,7 @@ describe("Recibo", function () {
 
     const recibo = await ethers.deployContract("Recibo", [
       await token.getAddress(),
+      ethers.ZeroAddress // No trusted forwarder for basic tests
     ]);
     await recibo.waitForDeployment();
 
@@ -29,8 +30,6 @@ describe("Recibo", function () {
       messageTo: alice.address,
       metadata: "{}",
       message: ethers.toUtf8Bytes("hello world"),
-      nonce: ethers.hexlify(ethers.randomBytes(32)),
-      signature: "0x",
     };
 
     await expect(recibo.sendMsg(info))
@@ -52,8 +51,6 @@ describe("Recibo", function () {
       messageTo: alice.address,
       metadata: "{\"purpose\":\"test\"}",
       message: ethers.toUtf8Bytes("invoice #1"),
-      nonce: ethers.hexlify(ethers.randomBytes(32)),
-      signature: "0x",
     };
 
     await expect(recibo.transferFromWithMsg(alice.address, amount, info))
